@@ -1,2 +1,8 @@
 # PISA-2018-and-2022-Data
-Assessing the Impact of COVID-19 on Student Reading Performance: A Difference-in-Differences   Analysis Using PISA 2018 and 2022 Data
+The COVID-19 pandemic has fundamentally disrupted educational systems worldwide, leading to unprecedented challenges in teaching and learning processes. School closures, shifts to remote learning, and unequal access to educational resources have raised concerns about the pandemic's impact on student learning outcomes, particularly in reading literacy. Understanding these effects is crucial for educators, policymakers, and stakeholders aiming to mitigate learning losses and promote educational equity.
+
+This study employs a Difference-in-Differences (DiD) analytical approach to assess how key predictors of student reading performance have changed from 2018 to 2022, using data from the Programme for International Student Assessment (PISA). By comparing two distinct cohorts of students—those assessed before the pandemic in 2018 and those assessed amid the pandemic's aftermath in 2022—we aim to isolate the potential impact of COVID-19 on reading achievement.
+
+We focus on a set of variables known to influence academic performance: grade level (grade), parental education (paredint), socioeconomic status (measured through standardized wealth and homepos indices), and student gender (student_gender). The DiD methodology allows us to examine whether the relationships between these predictors and reading scores have significantly changed over time, accounting for underlying trends.
+
+Additionally, we investigate differential effects across various student subgroups, including those from OECD versus non-OECD countries and top versus bottom-performing countries, as identified in previous analyses. This stratification enables us to explore whether the pandemic has exacerbated existing educational inequalities or affected certain groups more profoundly.
