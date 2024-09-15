@@ -1,0 +1,544 @@
+---
+title: "Assessing the Impact of COVID-19 on Student Reading Performance: A Difference-in-Differences
+  Analysis Using PISA 2018 and 2022 Data"
+author: 
+- name: "Nirmal Ghimire, Ph.D."
+  url: https://www.linkedin.com/in/nirmal-ghimire-5b96a034/
+  affiliation: Watson college of Education, University of North Carolina Wilmington
+  affiliation_url: https://uncw.edu/academics/colleges/wce/about/org-charts
+  orcid_id: 0000-0002-2032-1624
+date: "`r Sys.Date()`"
+output: distill::distill_article
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      comment = NA,
+                      warning = FALSE,
+                      message = FALSE,
+                      tidy = 'styler',
+                      error = FALSE, 
+                      highlight = TRUE, 
+                     prompt = FALSE,
+                     cache = TRUE)
+library(tidyverse)
+library(haven)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+library(naniar)
+library(tidyr)
+library(psych)
+```
+
+## A. Introduction
+
+The COVID-19 pandemic has fundamentally disrupted educational systems worldwide, leading to unprecedented challenges in teaching and learning processes. School closures, shifts to remote learning, and unequal access to educational resources have raised concerns about the pandemic's impact on student learning outcomes, particularly in reading literacy. Understanding these effects is crucial for educators, policymakers, and stakeholders aiming to mitigate learning losses and promote educational equity.
+
+This study employs a Difference-in-Differences (DiD) analytical approach to assess how key predictors of student reading performance have changed from 2018 to 2022, using data from the Programme for International Student Assessment (PISA). By comparing two distinct cohorts of students—those assessed before the pandemic in 2018 and those assessed amid the pandemic's aftermath in 2022—we aim to isolate the potential impact of COVID-19 on reading achievement.
+
+We focus on a set of variables known to influence academic performance: grade level (grade), parental education (paredint), socioeconomic status (measured through standardized wealth and homepos indices), and student gender (student_gender). The DiD methodology allows us to examine whether the relationships between these predictors and reading scores have significantly changed over time, accounting for underlying trends.
+
+Additionally, we investigate differential effects across various student subgroups, including those from OECD versus non-OECD countries and top versus bottom-performing countries, as identified in previous analyses. This stratification enables us to explore whether the pandemic has exacerbated existing educational inequalities or affected certain groups more profoundly.
+
+By integrating large-scale international assessment data with robust statistical techniques, this study contributes to the growing body of literature on the educational impacts of COVID-19. Our findings aim to inform targeted interventions and policy responses to support students' learning recovery and to enhance resilience in educational systems facing global crises.
+
+```{r load_data, echo=FALSE}
+# Load the 2018 dataset
+student_2018 <- read.csv("student_2018_ten.csv")
+# names(student_2018)
+#summary(student_2018$ICTHOME)
+
+# Load the 2022 dataset
+student_2022 <- read.csv("student_2022_ten.csv")
+#summary(student_2022$ICTHOME)
+# names(student_2022)
+```
+
+
+```{r data_preparation, echo=FALSE}
+# Function to process each dataset
+process_dataset <- function(df) {
+  df %>%
+    # Select variables of interest
+    select(CNTRYID, CNT, CNTSCHID, CNTSTUID, OECD, GRADE, ST004D01T, HOMEPOS, PAREDINT, reading_score) %>%
+    # Rename ST004D01T to STUDENT_GENDER
+    rename(STUDENT_GENDER = ST004D01T) %>%
+    # Change all variable names to lowercase
+    rename_all(tolower) %>%
+    # Change class of variables
+    mutate(
+      cntryid = as.factor(cntryid),
+      cnt = as.factor(cnt),
+      cntschid = as.numeric(cntschid),
+      cntstuid = as.numeric(cntstuid),
+      oecd = as.factor(oecd),
+      grade = as.numeric(grade),
+      paredint = as.numeric(paredint),
+      homepos = as.numeric(homepos),  # Assuming this is the 'wealth' variable
+      reading_score = as.numeric(reading_score),
+      student_gender = as.factor(student_gender)
+    )
+}
+
+# Process both datasets
+student_2018_processed <- process_dataset(student_2018)
+student_2022_processed <- process_dataset(student_2022)
+
+# For student_2018_processed
+student_2018_processed$student_gender <- factor(student_2018_processed$student_gender,
+                                                levels = c("1", "2"),
+                                                labels = c("Female", "Male"))
+
+# For student_2022_processed
+student_2022_processed$student_gender <- factor(student_2022_processed$student_gender,
+                                                levels = c("1", "2"),
+                                                labels = c("Female", "Male"))
+
+# Verify the changes
+# table(student_2018_processed$student_gender)
+# table(student_2022_processed$student_gender)
+
+# For student_2018_processed
+student_2018_processed$oecd <- factor(student_2018_processed$oecd,
+                                                levels = c("0", "1"),
+                                                labels = c("Non_OECD", "OECD"))
+
+# For student_2022_processed
+student_2022_processed$oecd <- factor(student_2022_processed$oecd,
+                                                levels = c("0", "1"),
+                                                labels = c("Non_OECD", "OECD"))
+
+# Check the structure of the processed datasets
+# summary(student_2018_processed)
+# summary(student_2022_processed)
+```
+
+
+```{r data_combination, echo=FALSE}
+### Summary Statistics
+# Add a year variable to each dataset
+student_2018_processed$year <- 2018
+student_2022_processed$year <- 2022
+
+# Combine the two datasets
+student_combined <- rbind(student_2018_processed, student_2022_processed)
+
+# Check the structure of the combined dataset
+#summary(student_combined)
+```
+
+## B. Understanding the Data
+### i. Missing Data Analysis
+```{r missing_data, echo=FALSE}
+# Check for missing data with percentages
+student_combined %>%
+  summarise(across(everything(), ~sum(is.na(.)), .names = "missing_{.col}")) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_values") %>%
+  mutate(
+    variable = str_remove(variable, "missing_"),
+    total_rows = nrow(student_combined),
+    percent_missing = (missing_values / total_rows) * 100
+  ) %>%
+  arrange(desc(missing_values)) %>%
+  mutate(percent_missing = round(percent_missing, 4)) %>%
+  knitr::kable(caption = "Missing Data Analysis") 
+```
+
+### ii. Getting Rid of Missing Data
+```{r missing_data_handling, echo=FALSE}
+# Remove rows with missing values
+student_combined_clean <- student_combined %>%
+  drop_na()
+
+# Calculating Summary Statistics (mean, median, sd, min, max, skewness, kurtosis) for grade, homepos, paredint, and reading_score
+summary_stats <- student_combined_clean %>%
+  select(grade, homepos, paredint, reading_score) %>%
+  describe() %>%
+  select(-vars, -mad, -trimmed, -se) %>%  # Remove unwanted columns
+  rownames_to_column("variable") %>%  # Convert row names to a column
+  pivot_longer(cols = -variable, names_to = "statistic", values_to = "value") %>%
+  pivot_wider(names_from = variable, values_from = value) %>%
+  mutate(across(where(is.numeric), ~round(., 2)))
+
+# Display the summary statistics
+summary_stats %>%
+  knitr::kable(caption = "Summary Statistics for continuous Variables")
+```   
+
+### iii. Categorical Variable Distribution (cnt, oecd, student_gender, year)
+```{r categorical_variable_distribution, echo=FALSE}
+# Function to calculate the distribution of categorical variables
+calculate_distribution <- function(df, var) {
+  df %>%
+    count({{ var }}, name = "count") %>%
+    mutate(percent = (count / sum(count)) * 100) %>%
+    arrange(desc(count))
+}
+
+# Calculate the distribution of categorical variables
+categorical_vars <- c("cnt", "oecd", "student_gender", "year")
+
+categorical_distribution <- map_df(categorical_vars, ~calculate_distribution(student_combined_clean, !!sym(.x)))
+
+# Display the distribution of categorical variables
+categorical_distribution %>%
+  knitr::kable(caption = "Distribution of Categorical Variables")
+```
+
+### iv. Names of the Variables
+```{r top_bottom_countries, echo=FALSE}
+### iv. Define top and bottom-performing countries
+# Define top and bottom-performing countries
+top_countries <- c("HKG", "KOR", "TAP", "MAC", "GBR", "USA")
+bottom_countries <- c("QAZ", "DOM", "MAR", "PAN")
+
+student_combined_clean$performance_group <- ifelse(student_combined_clean$cnt %in% top_countries, "Top", "Bottom")
+student_combined_clean$performance_group_numeric <- ifelse(student_combined_clean$performance_group == "Top", 1, 0)
+
+# Convert 'oecd_status' to numeric
+student_combined_clean$oecd_numeric <- ifelse(student_combined_clean$oecd == "OECD", 1, 0)
+
+# Convert 'student_gender' to numeric
+student_combined_clean$gender_numeric <- ifelse(student_combined_clean$student_gender == "Female", 1, 0)
+
+# Recode 'year' to 'year_binary'
+student_combined_clean$year_binary <- ifelse(student_combined_clean$year == 2018, 0, 1)
+
+# Standardizing homepos Variable
+student_combined_clean <- student_combined_clean %>%
+  group_by(year) %>%
+  mutate(SES_standardized = scale(homepos)) %>%
+  ungroup()
+#str(student_combined_clean$SES_standardized)
+# Check the structure of the updated dataset
+names(student_combined_clean)
+```
+
+## C. Difference-in-Differences Analysis
+### i. Building OECD vs Non-OECD Model
+```{r basis_model, echo=FALSE}
+# Basis Model
+model_basic <- lm(reading_score ~ year_binary * oecd_numeric, data = student_combined_clean)
+summary(model_basic)
+```
+
+```{r plot_basic_model, echo=FALSE}
+# Create a data frame for predictions
+pred_data <- expand.grid(year_binary = c(0, 1), oecd_numeric = c(0, 1))
+
+# Calculate predicted values
+pred_data$predicted_score <- predict(model_basic, newdata = pred_data)
+
+# Add a 'year' column for plotting
+pred_data$year <- ifelse(pred_data$year_binary == 0, 2018, 2022)
+
+# Create the plot
+p <- ggplot(pred_data, aes(x = year, y = predicted_score, color = factor(oecd_numeric))) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("0" = "red", "1" = "blue"),
+                     labels = c("0" = "Non-OECD", "1" = "OECD"),
+                     name = "OECD Status") +
+  scale_x_continuous(breaks = c(2018, 2022)) +
+  labs(title = "",
+       x = "Year",
+       y = "Predicted Reading Score") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        text = element_text(size = 12),
+        plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 14))
+
+# Save the plot as a high-quality JPEG
+ggsave("predicted_reading_scores_year_binary.jpg", plot = p, width = 10, height = 8, dpi = 600, device = "jpeg")
+
+# Display the plot (optional)
+print(p)
+```
+
+**Figure 1:** *Predicted PISA Reading Scores for 2018 and 2022 Among OECD and Non-OECD Countries*
+
+A linear regression analysis was performed to examine the effects of time (pre- and post-COVID-19), OECD membership, and their interaction on students' reading scores. The model included the main effects of year (coded as 0 for 2018 and 1 for 2022), OECD status (coded as 0 for non-OECD countries and 1 for OECD countries), and their interaction term. The overall model was significant, 𝐹(3,127119) = 6047,𝑝<.001, with an adjusted 𝑅2 of .1249, indicating that approximately 12.5% of the variance in reading scores was explained by the model.
+
+The intercept was significant (𝐵= 428.11, 𝑆𝐸= 0.52, 𝑡= 818.49,𝑝<.001), representing the estimated mean reading score for students in non-OECD countries in 2018. The main effect of year was significant and negative (𝐵=−11.39, 𝑆𝐸=0.74, 𝑡=−15.32,𝑝<.001), indicating that students in non-OECD countries scored, on average, 11.39 points lower in 2022 compared to 2018. The main effect of OECD status was significant and positive (𝐵=79.17, 𝑆𝐸=0.87, 𝑡=91.18,𝑝<.001), suggesting that, in 2018, students in OECD countries scored 79.17 points higher than those in non-OECD countries.
+
+Importantly, the interaction between year and OECD status was significant (𝐵= 8.74, 𝑆𝐸= 1.25, 𝑡= 6.99, 𝑝< .001), indicating that the change in reading scores from 2018 to 2022 differed between OECD and non-OECD countries. Specifically, non-OECD countries experienced a significant decline of 11.39 points in reading scores, while OECD countries had a smaller decline of 2.65 points (calculated as −11.39 + 8.74 −11.39 + 8.74). This 8.74-point difference in the change over time reflects that OECD countries were less adversely affected in terms of reading performance compared to non-OECD countries during this period.
+
+These findings suggest that the impact of the COVID-19 pandemic on student reading performance was more pronounced in non-OECD countries, potentially due to disparities in educational resources, infrastructure, and the ability to adapt to remote learning environments. The significant interaction effect underscores the need for targeted educational support and interventions in non-OECD countries to address the greater decline in reading achievement observed between 2018 and 2022.
+
+### ii. Building Top vs Bottom-Performing Countries Model
+```{r top_bottom_model, echo=FALSE}
+# Top vs Bottom-Performing Countries Model
+model_top_bottom <- lm(reading_score ~ year_binary * performance_group_numeric, data = student_combined_clean)
+summary(model_top_bottom)
+```
+
+```{r plot_top_bottom_model, echo=FALSE}
+# Create a data frame for predictions
+pred_data_top_bottom <- expand.grid(year_binary = c(0, 1), performance_group_numeric = c(0, 1))
+
+# Calculate predicted values
+pred_data_top_bottom$predicted_score <- predict(model_top_bottom, newdata = pred_data_top_bottom)
+
+# Add a 'year' column for plotting
+pred_data_top_bottom$year <- ifelse(pred_data_top_bottom$year_binary == 0, 2018, 2022)
+
+# Create the plot
+p_top_bottom <- ggplot(pred_data_top_bottom, aes(x = year, y = predicted_score, color = factor(performance_group_numeric))) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("0" = "red", "1" = "blue"),
+                     labels = c("0" = "Bottom-Performing", "1" = "Top-Performing"),
+                     name = "Performance Group") +
+  scale_x_continuous(breaks = c(2018, 2022)) +
+  labs(title = "",
+       x = "Year",
+       y = "Predicted Reading Score") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        text = element_text(size = 12),
+        plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 14))
+
+# Save the plot as a high-quality JPEG
+ggsave("predicted_reading_scores_year_binary_top_bottom.jpg", plot = p_top_bottom, width = 10, height = 8, dpi = 600, device = "jpeg")
+
+# Display the plot (optional)
+print(p_top_bottom)
+```
+
+**Figure 2.** *Predicted PISA Reading Scores (2018-2022) for Top and Bottom Performers*
+
+A linear regression analysis was conducted to examine the effects of time (pre- and post-COVID-19), country performance group (top-performing vs. bottom-performing countries), and their interaction on students' reading scores. The model included the main effects of year (coded as 0 for 2018 and 1 for 2022), performance group (coded as 0 for bottom-performing countries and 1 for top-performing countries), and the interaction term between year and performance group. The overall model was significant, $𝐹(3,127119) = 25,930$,$𝑝<.001$, with an adjusted $𝑅^2$ of $.3796$, indicating that approximately 38% of the variance in reading scores was explained by the model.
+
+The intercept was significant $(𝐵= 369.30, 𝑆𝐸= 0.57, 𝑡= 647.79, 𝑝<.001)$, representing the estimated mean reading score for students in bottom-performing countries in 2018. This serves as the reference point for interpreting the other coefficients. The main effect of year was significant and negative $(𝐵=−9.22, 𝑆𝐸=0.80, 𝑡=−11.47,𝑝<.001)$, indicating that students in bottom-performing countries scored, on average, $9.22$ points lower in 2022 compared to 2018. This suggests a decline in reading performance over time within bottom-performing countries.
+
+The main effect of performance group was significant and positive $(𝐵= 141.23, 𝑆𝐸= 0.72, 𝑡= 195.04,𝑝<.001)$, indicating that, in 2018, students in top-performing countries scored, on average, $141.23$ points higher than those in bottom-performing countries. This substantial difference reflects the existing performance gap between the two groups prior to the COVID-19 pandemic.
+
+The interaction between year and performance group was significant $(𝐵= 4.30, 𝑆𝐸= 1.03, 𝑡= 4.17, 𝑝< .001)$, indicating that the change in reading scores from 2018 to 2022 differed between top-performing and bottom-performing countries. Specifically, the positive interaction term suggests that the decline in reading scores over time was less pronounced in top-performing countries compared to bottom-performing countries.
+
+To interpret the interaction effect, the estimated mean reading scores for each group were calculated:
+
+***Bottom-Performing Countries (coded as 0):***
+
+* **Year 2018:** $\hat{𝑌} = 369.30 + (−9.22 × 0) + (141.23 × 0) + (4.30 × 0 × 0) = 369.30$
+* **Year 2022:** $\hat{𝑌} = 369.30 + (−9.22 × 1) + (141.23 × 0) + (4.30 × 1 × 0) = 369.30 − 9.22 = 360.08$
+* **Change Over Time:** $360.08 − 369.30 = −9.22$ points
+
+***Top-Performing Countries (coded as 1):***
+
+* **Year 2018:** $\hat{𝑌} = 369.30 + (−9.22 × 0) + (141.23 × 1) + (4.30 × 0 × 1) = 510.53$
+* **Year 2022:** $\hat{𝑌} = 369.30 + (−9.22 × 1) + (141.23 × 1) + (4.30 × 1 × 1) = 505.61$
+* **Change Over Time:** $505.61 − 510.53 = −4.92$ points 
+
+The difference in the changes over time between the two groups is calculated as:
+
+$Difference =$ **(Change in Top-Performing Countries)** $−$ **(Change in Bottom-Performing Countries)** $=$ $(−4.92) − (−9.22) = 4.30$
+
+This value matches the coefficient of the interaction term $(𝐵= 4.30, 𝑆𝐸= 1.03, 𝑡= 4.17, 𝑝< .001)$, indicating that top-performing countries experienced a smaller decline in reading scores compared to bottom-performing countries between 2018 and 2022.
+
+In summary, both top-performing and bottom-performing countries experienced declines in reading scores during the period encompassing the COVID-19 pandemic. However, the decline was significantly greater in bottom-performing countries ($−9.22$ points) than in top-performing countries ($−4.92$ points). The $4.30$-point difference in the decline suggests that top-performing countries were better able to mitigate the negative impact on reading performance.
+
+These findings may reflect differences in educational resources, infrastructure, and the capacity to adapt to challenges such as remote learning and educational disruptions caused by the pandemic. The significant interaction effect underscores the need for targeted support and interventions in bottom-performing countries to address the greater decline in reading achievement observed during this period.
+
+All coefficients in the model were statistically significant at the $𝑝<.001$ level, indicating strong evidence for the observed effects. The residual standard error was $89.64$, and the high $𝑅^2$ value suggests that the model explains a substantial portion of the variance in reading scores.
+
+### iii. Gender-Specific Model
+```{r gender_model, echo=FALSE}
+# Build the Gender-Based Model
+model_gender <- lm(reading_score ~ year_binary * gender_numeric + oecd_numeric + SES_standardized + paredint, 
+                   data = student_combined_clean)
+
+# View summary of the model
+summary(model_gender)
+```
+
+A multiple linear regression was conducted to examine the relationship between reading scores and several predictors, including year (pre- and post-COVID-19), gender, OECD status, socioeconomic status (SES), and parental education, while also considering the interaction between year and gender. The results of the model indicated that 28.93% of the variance in reading scores was explained by the predictors, $𝑅^2 = 0.2893, 𝐹(6,127116) = 8623,𝑝<.001$.
+
+**Main Effects**
+
+The intercept of the model $(𝐵=430.39, 𝑆𝐸=1.35, 𝑡=319.88,𝑝<.001)$ represents the average reading score for male students in non-OECD countries in 2018, holding all other variables constant. The negative coefficient for the main effect of year $(𝐵= −9.47, 𝑆𝐸= 0.76, 𝑡= −12.45,𝑝<.001)$ indicates that, on average, reading scores decreased by $9.47$ points in 2022 compared to 2018, across all students. This suggests a significant overall decline in reading performance post-COVID-19.
+
+The main effect of gender was significant $(𝐵=21.97, 𝑆𝐸=0.75, 𝑡=29.19,𝑝<.001)$, with female students scoring, on average, $21.97$ points higher than male students, controlling for other variables. This highlights a notable gender difference in reading performance, with females outperforming males across both years.
+
+**Other Predictors**
+
+OECD membership was positively associated with reading scores $(𝐵= 37.31, 𝑆𝐸= 0.63, 𝑡= 59.35, 𝑝< .001), indicating that students in OECD countries scored, on average, 37.31 points higher than those in non-OECD countries, holding other factors constant. Additionally, socioeconomic status, as measured by a standardized SES index, was a strong predictor of reading performance $(𝐵=49.61, 𝑆𝐸=0.33, 𝑡=152.32,𝑝<.001)$. For each one-unit increase in SES, reading scores increased by 49.61 points, highlighting the importance of socioeconomic factors in academic achievement. Parental education was not a significant predictor of reading scores $(𝐵=0.15, 𝑆𝐸=0.09, 𝑡=1.61,𝑝=.107)$.
+
+**Interaction Effect**
+
+The interaction between year and gender was not significant $(𝐵= 0.59, 𝑆𝐸=1.08, 𝑡=0.55,𝑝=.584)$. This suggests that the change in reading scores from 2018 to 2022 did not significantly differ between male and female students. In other words, while there was a general decline in reading scores between 2018 and 2022, this decline was consistent across genders, with no significant interaction effect observed.
+
+**Model Fit**
+
+The residual standard error was 95.95, indicating the typical deviation of the observed reading scores from the predicted scores. The model’s $𝑅^2 = 0.2893$ suggests that approximately 29% of the variance in reading scores can be explained by the year, gender, OECD status, SES, and parental education, as well as the interaction between year and gender. While the model is significant overall, it also indicates that other factors not included in the model may contribute to variations in student reading performance.
+
+**Conclusion**
+
+In summary, the results of this analysis highlight significant differences in reading performance by year, gender, OECD status, and socioeconomic status. Female students and those from OECD countries scored significantly higher on reading assessments, and higher SES was a strong positive predictor of reading performance. However, the decline in reading scores from 2018 to 2022 did not differ significantly by gender, indicating that the pandemic's effect on reading performance was consistent across both male and female students.
+
+```{r gender_plot, echo=FALSE}
+# Create a data frame for predictions
+pred_data_gender <- expand.grid(
+  year_binary = c(0, 1),
+  gender_numeric = c(0, 1),
+  oecd_numeric = c(0, 1)
+)
+
+# Create SES_standardized as nmatrix.1 with three levels
+ses_levels <- c(-1, 0, 1)  # Low, Average, High SES
+pred_data_gender <- do.call(rbind, replicate(length(ses_levels), pred_data_gender, simplify = FALSE))
+pred_data_gender$SES_standardized <- matrix(rep(ses_levels, each = nrow(pred_data_gender) / length(ses_levels)), ncol = 1)
+
+# Add paredint (assuming it's a numeric variable)
+pred_data_gender$paredint <- mean(student_combined_clean$paredint, na.rm = TRUE)
+
+# Calculate predicted values
+pred_data_gender$predicted_score <- predict(model_gender, newdata = pred_data_gender)
+
+# Add a 'year' column for plotting
+pred_data_gender$year <- ifelse(pred_data_gender$year_binary == 0, 2018, 2022)
+
+# Create labels for SES levels
+pred_data_gender$SES_level <- factor(pred_data_gender$SES_standardized,
+                                     levels = c(-1, 0, 1),
+                                     labels = c("Low SES", "Average SES", "High SES"))
+
+# Create the plot
+p_gender <- ggplot(pred_data_gender, aes(x = year, y = predicted_score, 
+                                         color = factor(gender_numeric), 
+                                         linetype = factor(oecd_numeric))) +
+  geom_line(aes(group = interaction(gender_numeric, oecd_numeric, SES_standardized))) +
+  geom_point(size = 3) +
+  facet_wrap(~ SES_level, ncol = 1) +
+  scale_color_manual(values = c("0" = "blue", "1" = "pink"),
+                     labels = c("0" = "Male", "1" = "Female"),
+                     name = "Gender") +
+  scale_linetype_manual(values = c("0" = "dashed", "1" = "solid"),
+                        labels = c("0" = "Non-OECD", "1" = "OECD"),
+                        name = "OECD Status") +
+  scale_x_continuous(breaks = c(2018, 2022)) +
+  labs(title = "",
+       x = "Year",
+       y = "Predicted Reading Score") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        text = element_text(size = 12),
+        plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 14),
+        strip.text = element_text(size = 12, face = "bold"))
+
+# Save the plot as a high-quality JPEG
+ggsave("predicted_reading_scores_gender_year_oecd_ses.jpg", plot = p_gender, width = 12, height = 15, dpi = 600, device = "jpeg")
+
+# Display the plot
+print(p_gender)
+```
+
+**Figure 3.** *Predicted PISA Reading Scores (2018-2022) by Gender, OECD Status, and Socioeconomic Status (SES)*
+
+### iv. Country Comparison
+```{r country_comparison, echo=FALSE}
+# Model with interaction by country
+model_country <- lm(reading_score ~ year_binary * cnt + gender_numeric * cnt + SES_standardized * cnt + paredint * cnt, data = student_combined_clean)
+
+# View summary of the model
+summary(model_country)
+```
+
+A linear regression analysis was conducted to investigate the relationship between reading scores and several predictors, including year (pre- and post-COVID-19), gender, socioeconomic status (SES), and parental education, with interactions for country. The model explained 45.92% of the variance in reading scores, $𝑅^2 = 0.4592, 𝐹(49,127073) = 2202,𝑝<.001$, indicating that country-level factors and interactions play a significant role in explaining differences in student reading performance.
+
+**Main Effects:**
+
+* The intercept $(𝐵=336.55, 𝑆𝐸=3.99, 𝑡=84.28,𝑝<.001)$ represents the average reading score for male students in the reference country (assumed to be the base level) in 2018, with average SES and parental education.
+* Year: The main effect of year $(𝐵= 1.06, 𝑆𝐸= 1.55, 𝑡= 0.68,𝑝=.491)$ was not significant, indicating that the overall change in reading scores from 2018 to 2022, controlling for other factors, was not substantial.
+* Country: The coefficients for countries like Hong Kong (HKG) (𝐵= 154.77, 𝑆𝐸= 5.62, 𝑡= 27.52, 𝑝<.001), Macau (MAC) (𝐵= 169.08, 𝑆𝐸= 5.91, 𝑡= 28.63, 𝑝<.001), and others were significant, indicating that reading performance varied significantly across countries, with some countries scoring significantly higher than the reference group.
+
+**Interaction Effects:**
+
+* Year by Country: The interaction between year and country reveals important insights into how reading performance changed differently across countries between 2018 and 2022. 
+    - For instance, Hong Kong $(𝐵=−26.92, 𝑆𝐸=2.21, 𝑡=−12.19,𝑝<.001)$ and Macau $(𝐵=−17.06, 𝑆𝐸=2.42, 𝑡=−7.04,𝑝<.001)$ showed significant declines in reading performance from 2018 to 2022, suggesting that these countries may have been more negatively impacted by the pandemic. 
+    - In contrast, Panama (𝐵=8.70, 𝑆𝐸=2.30, 𝑡=3.79,𝑝<.001) experienced an increase in reading scores over the same period. 
+* Gender by Country: The interaction between gender and country indicates that the gender gap in reading performance varied significantly across countries. For example, 
+    - in Great Britain (GBR), the gender gap was significant, with male students scoring lower than female students $(𝐵=−12.94, 𝑆𝐸=1.88, 𝑡= − 6.88, 𝑝<.001)$.
+    - Macau (MAC) $(𝐵=−17.41, 𝑆𝐸=2.41, 𝑡=−7.23, 𝑝<.001)$ and Hong Kong (HKG) $(𝐵=−9.87, 𝑆𝐸=2.19, 𝑡=−4.50, 𝑝<.001)$ also showed significant gender disparities, with female students outperforming male students.
+* SES by Country: The interaction between SES and country highlights how socioeconomic status influences reading performance differently across nations. For example, 
+    - in Macau $(𝐵=−12.49, 𝑆𝐸=1.78, 𝑡=−7.02,𝑝<.001)$ and Morocco (MAR) $(𝐵=−14.44, 𝑆𝐸=1.25, 𝑡=−11.56,𝑝<.001)$, higher SES was associated with much greater increases in reading performance compared to the reference country, indicating significant disparities based on SES in these countries. 
+    - However, in the USA $(𝐵=9.39, 𝑆𝐸=1.50, 𝑡=6.25,𝑝<.001)$, higher SES was also positively associated with better reading performance, though to a lesser extent compared to other countries.
+
+**Significant Changes in Reading Scores:**
+
+* Hong Kong and Macau experienced some of the largest declines in reading performance from 2018 to 2022, particularly in conjunction with gender disparities, as female students were significantly outperforming males.
+* Panama was one of the few countries that showed a positive change in reading scores during this period, which may reflect specific factors unique to the educational response in Panama.
+* Gender disparities in reading performance were most pronounced in countries like Great Britain, Macau, and Hong Kong, where female students had a significant advantage over male students.
+
+**Conclusion:**
+
+The analysis reveals substantial differences in reading performance across countries, with notable variations in how the pandemic impacted different nations. Gender disparities were significant in many countries, with female students outperforming male students. Moreover, socioeconomic status played a key role in reading performance, with high-SES students generally outperforming their lower-SES peers, though the extent of this influence varied by country. These findings highlight the need for tailored educational interventions that account for both country-specific and demographic factors when addressing post-pandemic educational recovery.
+
+```{r country_plot, echo=FALSE}
+# Define all countries and their codes
+country_map <- c(
+  "HKG" = "Hong Kong", "KOR" = "Korea", "TAP" = "Chinese Taipei",
+  "MAC" = "Macao", "GBR" = "United Kingdom", "USA" = "United States",
+  "QAZ" = "Kazakhstan", "DOM" = "Dominican Republic", "MAR" = "Morocco", "PAN" = "Panama"
+)
+
+# Create a data frame for predictions
+pred_data_country <- expand.grid(
+  year_binary = c(0, 1),
+  cnt = names(country_map),
+  gender_numeric = c(0, 1)
+)
+
+# Add SES_standardized as a matrix column
+ses_levels <- c(-1, 0, 1)  # Low, Average, High SES
+pred_data_country <- do.call(rbind, replicate(length(ses_levels), pred_data_country, simplify = FALSE))
+pred_data_country$SES_standardized <- matrix(rep(ses_levels, each = nrow(pred_data_country) / length(ses_levels)), ncol = 1)
+
+# Add paredint
+pred_data_country$paredint <- mean(student_combined_clean$paredint, na.rm = TRUE)
+
+# Calculate predicted values
+pred_data_country$predicted_score <- predict(model_country, newdata = pred_data_country)
+
+# Add a 'year' column for plotting
+pred_data_country$year <- ifelse(pred_data_country$year_binary == 0, 2018, 2022)
+
+# Add full country names for facet labels
+pred_data_country$country_name <- country_map[pred_data_country$cnt]
+
+# Create labels for gender and SES
+pred_data_country$gender_label <- ifelse(pred_data_country$gender_numeric == 0, "Male", "Female")
+pred_data_country$SES_label <- factor(pred_data_country$SES_standardized,
+                                      levels = c(-1, 0, 1),
+                                      labels = c("Low SES", "Average SES", "High SES"))
+
+# Create the plot
+p_country <- ggplot(pred_data_country, aes(x = year, y = predicted_score, color = gender_label, linetype = SES_label)) +
+  geom_line(size = 1) +
+  facet_wrap(~ country_name, ncol = 2) +
+  scale_x_continuous(breaks = c(2018, 2022)) +
+  scale_color_manual(values = c("Male" = "blue", "Female" = "red")) +
+  labs(title = "",
+       x = "Year",
+       y = "Predicted Reading Score",
+       color = "Gender",
+       linetype = "SES Level") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        text = element_text(size = 12),
+        plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 14),
+        strip.text = element_text(size = 12, face = "bold"))
+
+# Save the plot as a high-quality JPEG
+ggsave("predicted_reading_scores_country_year_gender_ses.jpg", plot = p_country, width = 15, height = 20, dpi = 600, device = "jpeg")
+
+# Display the plot
+print(p_country)
+```
+
+**Figure 1.** *Predicted PISA Reading Scores by Country, Gender, and Socioeconomic Status (2018-2022)*
